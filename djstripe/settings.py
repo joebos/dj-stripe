@@ -1,11 +1,10 @@
-"""
-Beging porting from django-stripe-payments
-"""
+# -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 import sys
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import importlib
+from django.utils.functional import SimpleLazyObject
 
 from . import safe_settings
 
@@ -21,7 +20,7 @@ def get_user_model():
         from django.contrib.auth.models import User
     return User
 
-User = get_user_model()
+User = SimpleLazyObject(get_user_model)
 
 
 def plan_from_stripe_id(stripe_id):
@@ -52,6 +51,12 @@ PAYMENTS_PLANS = safe_settings.PAYMENTS_PLANS
 PLAN_CHOICES = safe_settings.PLAN_CHOICES
 PASSWORD_INPUT_RENDER_VALUE = safe_settings.PASSWORD_INPUT_RENDER_VALUE
 PASSWORD_MIN_LENGTH = safe_settings.PASSWORD_MIN_LENGTH
+
+PRORATION_POLICY = safe_settings.PRORATION_POLICY
+PRORATION_POLICY_FOR_UPGRADES = safe_settings.PRORATION_POLICY_FOR_UPGRADES
+CANCELLATION_AT_PERIOD_END = safe_settings.CANCELLATION_AT_PERIOD_END
+
+SEND_INVOICE_RECEIPT_EMAILS = safe_settings.SEND_INVOICE_RECEIPT_EMAILS
 
 
 DEFAULT_PLAN = getattr(

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Note: Code to make this work with Django 1.5+ customer user models
         was inspired by work by Andrew Brown (@almostabc).
@@ -6,7 +7,7 @@ Note: Code to make this work with Django 1.5+ customer user models
 from django.contrib import admin
 from django.db.models.fields import FieldDoesNotExist
 
-from .models import Event, EventProcessingException, Transfer, Charge
+from .models import Event, EventProcessingException, Transfer, Charge, Plan
 from .models import Invoice, InvoiceItem, CurrentSubscription, Customer
 
 from .settings import User
@@ -98,7 +99,7 @@ def send_charge_receipt(modeladmin, request, queryset):
 
 admin.site.register(
     Charge,
-    readonly_fields = ('created',),
+    readonly_fields=('created',),
     list_display=[
         "stripe_id",
         "customer",
@@ -135,7 +136,7 @@ admin.site.register(
 
 admin.site.register(
     EventProcessingException,
-    readonly_fields = ('created',),
+    readonly_fields=('created',),
     list_display=[
         "message",
         "event",
@@ -151,7 +152,7 @@ admin.site.register(
 admin.site.register(
     Event,
     raw_id_fields=["customer"],
-    readonly_fields = ('created',),
+    readonly_fields=('created',),
     list_display=[
         "stripe_id",
         "kind",
@@ -188,7 +189,7 @@ subscription_status.short_description = "Subscription Status"
 admin.site.register(
     Customer,
     raw_id_fields=["user"],
-    readonly_fields = ('created',),
+    readonly_fields=('created',),
     list_display=[
         "stripe_id",
         "user",
@@ -221,14 +222,14 @@ customer_has_card.short_description = "Customer Has Card"
 
 
 def customer_user(obj):
-    if hasattr(User, 'USERNAME_FIELD'):
+    if hasattr(obj.customer.user, 'USERNAME_FIELD'):
         # Using a Django 1.5 User model
-        username = getattr(obj, obj.USERNAME_FIELD)
+        username = getattr(obj.customer.user, User.USERNAME_FIELD)
     else:
         # Using a pre-Django 1.5 User model
         username = obj.customer.user.username
     # In Django 1.5+ a User is not guaranteed to have an email field
-    email = getattr(obj, 'email', '')
+    email = getattr(obj.customer.user, 'email', '')
 
     return "{0} <{1}>".format(
         username,
@@ -240,7 +241,7 @@ customer_has_card.short_description = "Customer"
 admin.site.register(
     Invoice,
     raw_id_fields=["customer"],
-    readonly_fields = ('created',),
+    readonly_fields=('created',),
     list_display=[
         "stripe_id",
         "paid",
@@ -277,7 +278,7 @@ admin.site.register(
 admin.site.register(
     Transfer,
     raw_id_fields=["event"],
-    readonly_fields = ('created',),
+    readonly_fields=('created',),
     list_display=[
         "stripe_id",
         "amount",
@@ -291,3 +292,31 @@ admin.site.register(
         "event__stripe_id"
     ]
 )
+
+
+class PlanAdmin(admin.ModelAdmin):
+
+    def save_model(self, request, obj, form, change):
+        """Update or create objects using our custom methods that
+        sync with Stripe."""
+
+        if change:
+            obj.update_name()
+
+        else:
+            Plan.get_or_create(**form.cleaned_data)
+
+    def get_readonly_fields(self, request, obj=None):
+        readonly_fields = list(self.readonly_fields)
+        if obj:
+            readonly_fields.extend([
+                'stripe_id',
+                'amount',
+                'currency',
+                'interval',
+                'interval_count',
+                'trial_period_days'])
+
+        return readonly_fields
+
+admin.site.register(Plan, PlanAdmin)

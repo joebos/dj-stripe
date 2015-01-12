@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+import warnings
+
 from django.conf import settings
 from django import forms
 from django.utils.translation import ugettext as _
@@ -91,20 +94,17 @@ if StripeWidget and setup_user_email:
 
         # Stripe nameless fields
         number = forms.CharField(max_length=20,
-            required=False,
-            widget=StripeWidget(attrs={"data-stripe": "number"})
-        )
+                                 required=False,
+                                 widget=StripeWidget(attrs={"data-stripe": "number"}))
         cvc = forms.CharField(max_length=4, label=_("CVC"),
-            required=False,
-            widget=StripeWidget(attrs={"data-stripe": "cvc"}))
+                              required=False,
+                              widget=StripeWidget(attrs={"data-stripe": "cvc"}))
         exp_month = forms.CharField(max_length=2,
-                required=False,
-                widget=StripeWidget(attrs={"data-stripe": "exp-month"})
-        )
+                                    required=False,
+                                    widget=StripeWidget(attrs={"data-stripe": "exp-month"}))
         exp_year = forms.CharField(max_length=4,
-                required=False,
-                widget=StripeWidget(attrs={"data-stripe": "exp-year"})
-        )
+                                   required=False,
+                                   widget=StripeWidget(attrs={"data-stripe": "exp-year"}))
 
         def save(self, user):
             try:
@@ -115,3 +115,8 @@ if StripeWidget and setup_user_email:
                 # handle error here
                 raise e
 
+        def __init__(self, *args, **kwargs):
+            if settings.DEBUG:
+                msg = "djstripe.forms.StripeSubscriptionSignupForm is now deprecated. djstripe recommends the standard two-stage account creation processes."
+                warnings.warn(msg, DeprecationWarning, stacklevel=2)
+            super(StripeSubscriptionSignupForm, self).__init__(*args, **kwargs)

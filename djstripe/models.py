@@ -1,6 +1,4 @@
-"""
-Beging porting from django-stripe-payments
-"""
+# -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 import datetime
 import decimal
@@ -10,8 +8,9 @@ import traceback
 from django.conf import settings
 from django.core.mail import EmailMessage
 from django.db import models
-from django.utils import timezone
 from django.template.loader import render_to_string
+from django.utils import timezone
+from django.utils.encoding import python_2_unicode_compatible
 
 from django.contrib.sites.models import Site
 
@@ -21,8 +20,11 @@ import stripe
 
 from . import exceptions
 from .managers import CustomerManager, ChargeManager, TransferManager
-from .settings import PAYMENTS_PLANS, INVOICE_FROM_EMAIL
+
+from .settings import PAYMENTS_PLANS, INVOICE_FROM_EMAIL, SEND_INVOICE_RECEIPT_EMAILS
+from .settings import PRORATION_POLICY, CANCELLATION_AT_PERIOD_END
 from .settings import plan_from_stripe_id
+from .settings import PY3
 from .signals import WEBHOOK_SIGNALS
 from .signals import subscription_made, cancelled, card_changed
 from .signals import webhook_processing_error
@@ -32,6 +34,10 @@ from .settings import DEFAULT_PLAN
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 stripe.api_version = getattr(settings, "STRIPE_API_VERSION", "2012-11-07")
+
+
+if PY3:
+    unicode = str
 
 
 def convert_tstamp(response, field_name=None):
@@ -65,6 +71,7 @@ class StripeObject(TimeStampedModel):
         abstract = True
 
 
+@python_2_unicode_compatible
 class EventProcessingException(TimeStampedModel):
 
     event = models.ForeignKey("Event", null=True)
@@ -81,10 +88,11 @@ class EventProcessingException(TimeStampedModel):
             traceback=traceback.format_exc()
         )
 
-    def __unicode__(self):
+    def __str__(self):
         return u"<%s, pk=%s, Event=%s>" % (self.message, self.pk, self.event)
 
 
+@python_2_unicode_compatible
 class Event(StripeObject):
 
     kind = models.CharField(max_length=250)
@@ -99,7 +107,7 @@ class Event(StripeObject):
     def message(self):
         return self.validated_message
 
-    def __unicode__(self):
+    def __str__(self):
         return "%s - %s" % (self.kind, self.stripe_id)
 
     def link_customer(self):
@@ -145,7 +153,7 @@ class Event(StripeObject):
             "charge.refunded",
             "charge.dispute.created",
             "charge.dispute.updated",
-            "chagne.dispute.closed",
+            "charge.dispute.closed",
             "customer.created",
             "customer.updated",
             "customer.deleted",
@@ -309,6 +317,7 @@ class TransferChargeFee(TimeStampedModel):
     kind = models.CharField(max_length=150)
 
 
+@python_2_unicode_compatible
 class Customer(StripeObject):
 
     user = models.OneToOneField(getattr(settings, 'AUTH_USER_MODEL', 'auth.User'), null=True)
@@ -319,7 +328,7 @@ class Customer(StripeObject):
 
     objects = CustomerManager()
 
-    def __unicode__(self):
+    def __str__(self):
         return unicode(self.user)
 
     @property
@@ -368,23 +377,27 @@ class Customer(StripeObject):
                 "Customer does not have current subscription"
             )
         try:
-            """ 
-            If plan has trial days and customer cancels before trial period ends, 
-            then end subscription now, i.e. at_period_end=False 
+            """
+            If plan has trial days and customer cancels before trial period ends,
+            then end subscription now, i.e. at_period_end=False
             """
             if self.current_subscription.trial_end and self.current_subscription.trial_end > timezone.now():
                 at_period_end = False
             sub = self.stripe_customer.cancel_subscription(at_period_end=at_period_end)
         except stripe.InvalidRequestError as e:
+            if PY3:
+                err_msg = str(e)
+            else:
+                err_msg = e.message
             raise exceptions.SubscriptionCancellationFailure(
                 "Customer's information is not current with Stripe.\n{}".format(
-                    e.message
+                    err_msg
                 )
             )
         current_subscription.status = sub.status
         current_subscription.cancel_at_period_end = sub.cancel_at_period_end
-        current_subscription.period_end = convert_tstamp(sub, "current_period_end")
-        current_subscription.canceled_at = timezone.now()
+        current_subscription.current_period_end = convert_tstamp(sub, "current_period_end")
+        current_subscription.canceled_at = convert_tstamp(sub, "canceled_at") or timezone.now()
         current_subscription.save()
         cancelled.send(sender=self, stripe_response=sub)
         return current_subscription
@@ -481,6 +494,7 @@ class Customer(StripeObject):
                 sub_obj.amount = (sub.plan.amount / decimal.Decimal("100"))
                 sub_obj.status = sub.status
                 sub_obj.cancel_at_period_end = sub.cancel_at_period_end
+                sub_obj.canceled_at = convert_tstamp(sub, "canceled_at")
                 sub_obj.start = convert_tstamp(sub.start)
                 sub_obj.quantity = sub.quantity
                 sub_obj.save()
@@ -497,6 +511,7 @@ class Customer(StripeObject):
                     amount=(sub.plan.amount / decimal.Decimal("100")),
                     status=sub.status,
                     cancel_at_period_end=sub.cancel_at_period_end,
+                    canceled_at=convert_tstamp(sub, "canceled_at"),
                     start=convert_tstamp(sub.start),
                     quantity=sub.quantity
                 )
@@ -512,9 +527,9 @@ class Customer(StripeObject):
                 """
                 sub_obj.trial_start = None
                 sub_obj.trial_end = None
-            
+
             sub_obj.save()
-            
+
             return sub_obj
 
     def update_plan_quantity(self, quantity, charge_immediately=False):
@@ -527,30 +542,26 @@ class Customer(StripeObject):
         )
 
     def subscribe(self, plan, quantity=1, trial_days=None,
-                  charge_immediately=True):
+                  charge_immediately=True, prorate=PRORATION_POLICY):
         cu = self.stripe_customer
         """
         Trial_days corresponds to the value specified by the selected plan
         for the key trial_period_days.
         """
         if ("trial_period_days" in PAYMENTS_PLANS[plan]):
-            trial_days=PAYMENTS_PLANS[plan]["trial_period_days"]
-        """
-        The subscription is defined with prorate=False to make the subscription
-        end behavior of Change plan consistent with the one of Cancel subscription (which is
-        defined with at_period_end=True).
-        """
+            trial_days = PAYMENTS_PLANS[plan]["trial_period_days"]
+        
         if trial_days:
             resp = cu.update_subscription(
                 plan=PAYMENTS_PLANS[plan]["stripe_plan_id"],
                 trial_end=timezone.now() + datetime.timedelta(days=trial_days),
-                prorate=False,
+                prorate=prorate,
                 quantity=quantity
             )
         else:
             resp = cu.update_subscription(
                 plan=PAYMENTS_PLANS[plan]["stripe_plan_id"],
-                prorate=False,
+                prorate=prorate,
                 quantity=quantity
             )
         self.sync_current_subscription()
@@ -632,7 +643,7 @@ class CurrentSubscription(TimeStampedModel):
     """
     def is_status_temporarily_current(self):
         return self.canceled_at and self.start < self.canceled_at and self.cancel_at_period_end
-        
+
     def is_valid(self):
         if not self.is_status_current():
             return False
@@ -753,7 +764,7 @@ class Invoice(TimeStampedModel):
         Save invoice period end assignment.
         """
         invoice.save()
-        
+
         if stripe_invoice.get("charge"):
             obj = c.record_charge(stripe_invoice["charge"])
             obj.invoice = invoice
@@ -768,7 +779,7 @@ class Invoice(TimeStampedModel):
         if event.kind in valid_events:
             invoice_data = event.message["data"]["object"]
             stripe_invoice = stripe.Invoice.retrieve(invoice_data["id"])
-            cls.sync_from_stripe_data(stripe_invoice)
+            cls.sync_from_stripe_data(stripe_invoice, send_receipt=SEND_INVOICE_RECEIPT_EMAILS)
 
 
 class InvoiceItem(TimeStampedModel):
@@ -877,3 +888,95 @@ class Charge(StripeObject):
             ).send()
             self.receipt_sent = num_sent > 0
             self.save()
+
+
+CURRENCIES = (
+    ('usd', 'U.S. Dollars',),
+    ('gbp', 'Pounds (GBP)',),
+    ('eur', 'Euros',))
+
+INTERVALS = (
+    ('week', 'Week',),
+    ('month', 'Month',),
+    ('year', 'Year',))
+
+
+@python_2_unicode_compatible
+class Plan(StripeObject):
+    """A Stripe Plan."""
+
+    name = models.CharField(max_length=100, null=False)
+    currency = models.CharField(
+        choices=CURRENCIES,
+        max_length=10,
+        null=False)
+    interval = models.CharField(
+        max_length=10,
+        choices=INTERVALS,
+        verbose_name="Interval type",
+        null=False)
+    interval_count = models.IntegerField(
+        verbose_name="Intervals between charges",
+        default=1,
+        null=True)
+    amount = models.DecimalField(decimal_places=2, max_digits=7,
+                                 verbose_name="Amount (per period)",
+                                 null=False)
+    trial_period_days = models.IntegerField(null=True)
+
+    def __str__(self):
+        return self.name
+
+    @classmethod
+    def create(cls, metadata={}, **kwargs):
+        """Create and then return a Plan (both in Stripe, and in our db)."""
+
+        stripe.Plan.create(
+            id=kwargs['stripe_id'],
+            amount=int(kwargs['amount'] * 100),
+            currency=kwargs['currency'],
+            interval=kwargs['interval'],
+            interval_count=kwargs.get('interval_count', None),
+            name=kwargs['name'],
+            trial_period_days=kwargs.get('trial_period_days'),
+            metadata=metadata)
+
+        plan = Plan.objects.create(
+            stripe_id=kwargs['stripe_id'],
+            amount=kwargs['amount'],
+            currency=kwargs['currency'],
+            interval=kwargs['interval'],
+            interval_count=kwargs.get('interval_count', None),
+            name=kwargs['name'],
+            trial_period_days=kwargs.get('trial_period_days'),
+        )
+
+        return plan
+
+    @classmethod
+    def get_or_create(cls, **kwargs):
+        try:
+            return Plan.objects.get(stripe_id=kwargs['stripe_id']), False
+        except Plan.DoesNotExist:
+            return cls.create(**kwargs), True
+
+    def update_name(self):
+        """Update the name of the Plan in Stripe and in the db.
+
+        - Assumes the object being called has the name attribute already
+          reset, but has not been saved.
+        - Stripe does not allow for update of any other Plan attributes besides
+          name.
+
+        """
+
+        p = stripe.Plan.retrieve(self.stripe_id)
+        p.name = self.name
+        p.save()
+
+        self.save()
+
+    @property
+    def stripe_plan(self):
+        """Return the plan data from Stripe."""
+        return stripe.Plan.retrieve(self.stripe_id)
