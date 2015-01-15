@@ -939,6 +939,7 @@ class Plan(StripeObject):
             interval_count=kwargs.get('interval_count', None),
             name=kwargs['name'],
             trial_period_days=kwargs.get('trial_period_days'),
+            statement_descriptor=kwargs.get('statement_descriptor'),
             metadata=metadata)
 
         plan = Plan.objects.create(
@@ -949,6 +950,7 @@ class Plan(StripeObject):
             interval_count=kwargs.get('interval_count', None),
             name=kwargs['name'],
             trial_period_days=kwargs.get('trial_period_days'),
+            statement_descriptor=kwargs.get('statement_descriptor')
         )
 
         return plan
