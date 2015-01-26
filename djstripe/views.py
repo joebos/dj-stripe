@@ -85,8 +85,8 @@ class CancelSubscriptionView(LoginRequiredMixin, SubscriptionMixin, FormView):
             # If no pro-rate, they get kicked right out.
             messages.info(self.request, "Your subscription is now cancelled.")
             # logout the user
-            logout(self.request)
-            return redirect("home")
+            #logout(self.request)
+            return redirect("djstripe:account")
         else:
             # If pro-rate, they get some time to stay.
             messages.info(self.request, "Your subscription status is now '{a}' until '{b}'".format(
@@ -177,7 +177,7 @@ class SubscribeFormView(
 
     form_class = PlanForm
     template_name = "djstripe/subscribe_form.html"
-    success_url = reverse_lazy("djstripe:history")
+    success_url = reverse_lazy("djstripe:account")
     form_valid_message = "You are now subscribed!"
 
     def post(self, request, *args, **kwargs):
@@ -209,7 +209,7 @@ class ChangePlanView(LoginRequiredMixin,
 
     form_class = PlanForm
     template_name = "djstripe/subscribe_form.html"
-    success_url = reverse_lazy("djstripe:history")
+    success_url = reverse_lazy("djstripe:account")
     form_valid_message = "You've just changed your plan!"
 
     def post(self, request, *args, **kwargs):
