@@ -21,7 +21,8 @@ INVOICE_FROM_EMAIL = getattr(
 PAYMENTS_PLANS = getattr(settings, "DJSTRIPE_PLANS", {})
 
 # Sort the PAYMENT_PLANS dictionary ascending by price.
-PAYMENT_PLANS = OrderedDict(sorted(PAYMENTS_PLANS.items(), key=lambda t: t[1]['price']))
+PAYMENTS_PLANS = OrderedDict(sorted(PAYMENTS_PLANS.iteritems(), key=lambda t: t[1]['display_order']))
+
 PLAN_CHOICES = [
     (plan, PAYMENTS_PLANS[plan].get("name", plan))
     for plan in PAYMENTS_PLANS
